@@ -23,7 +23,7 @@ from lit_gpt.speed_monitor import estimate_flops, measure_flops
 from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, num_parameters, step_csv_logger, lazy_load
 from pytorch_lightning.loggers import WandbLogger
 from flash_attn.losses.cross_entropy import CrossEntropyLoss
-from gsm8k_data import preprocess_gsm8k
+from sudoku_data import preprocess_sudoku
 from transformers import AutoTokenizer
 import random
 import argparse
@@ -103,7 +103,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'mdm-gsm8k-{args.model}M'
+    hp_name = f'mdm-sudoku-{args.model}M'
     out_dir = Path('workdir/finetune') / hp_name
     pretrain_path = args.pretrain_path
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
@@ -128,9 +128,9 @@ def setup(
 
     fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=[logger, wandb_logger])
     fabric.print(hparams)
-    # fabric.launch(main, train_data_dir, val_data_dir, resume)
-    fabric.launch(main, pretrain_path, resume)
+    #fabric.launch(main, train_data_dir, val_data_dir, resume)
     # main(fabric, pretrain_path, resume)
+    fabric.launch(main, pretrain_path, resume)
 
 
 def main(fabric, pretrain_path, resume):
@@ -144,7 +144,7 @@ def main(fabric, pretrain_path, resume):
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
                                               padding_side="right", use_fast=True)
 
-    train_set = preprocess_gsm8k(tokenizer, max_length=256)
+    train_set = preprocess_sudoku(tokenizer, max_prompt_length=256, max_response_length=256)
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
     train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
@@ -247,7 +247,8 @@ def train(fabric, state, train_dataloader, monitor, resume):
         iter_t0 = time.perf_counter()
         input_ids = train_data['data'] # [prompt + answer + padding], length=2048
         prompt_length = train_data['input_length']  # prompt length
-        max_length = 256
+        # print(f"input ids shape: {input_ids.shape}")
+        max_length = 512
         input_ids = input_ids[:, :max_length]
 
         total_dim = 32000
