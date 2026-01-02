@@ -19,7 +19,7 @@
 #     --n_gpu 1 \
 #     --bs 256
 
-CUDA_VISIBLE_DEVICES=2 torchrun \
+CUDA_VISIBLE_DEVICES=3 torchrun \
     --nproc_per_node=1 \
     --node_rank=0 \
     --nnodes=1 \

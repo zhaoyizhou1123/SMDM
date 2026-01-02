@@ -43,7 +43,7 @@ def preprocess_sudoku(tokenizer, max_prompt_length=256, max_response_length=256)
             pad_token_id = 0
         q_len = question.shape[-1]
         q_padding = torch.full((max_prompt_length - q_len,), pad_token_id, dtype=question.dtype)
-        question = torch.cat((question, q_padding), dim=-1)
+        question = torch.cat((q_padding, question), dim=-1) # left padding question
         # thought = tokenizer(thought, return_tensors="pt")['input_ids'][0]
         answer = tokenizer(answer, return_tensors="pt")['input_ids'][0]
         # answer = torch.cat((answer, torch.tensor([tokenizer.eos_token_id])), dim=-1)

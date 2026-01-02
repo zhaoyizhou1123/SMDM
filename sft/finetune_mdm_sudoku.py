@@ -34,10 +34,11 @@ def parse_args():
     parse = argparse.ArgumentParser()
     parse.add_argument('--model', type=int, help='model parameters')
     parse.add_argument('--bs', type=int, default=256, help='batch size')
-    parse.add_argument('--epoch', type=int, default=40, help='training epoch')
+    parse.add_argument('--epoch', type=int, default=1, help='training epoch')
     parse.add_argument('--pretrain_path', type=str, help='pretrain ckpt path')
     parse.add_argument('--nodes_num', type=int, default=1, help='number of devices')
     parse.add_argument('--n_gpu', type=int, default=4, help='number of gpu')
+    parse.add_argument('--save_freq', type=int, default=200)
     args = parse.parse_args()
     return args
 
@@ -53,7 +54,7 @@ micro_batch_size = 16
 max_step = int(769240 * args.epoch / args.bs)
 warmup_steps = int(max_step * 0.01)
 log_step_interval = 10
-save_step_interval = 5000
+save_step_interval = args.save_freq
 
 weight_decay = 1e-1
 beta1 = 0.9
@@ -103,7 +104,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'mdm-sudoku-{args.model}M'
+    hp_name = f'mdm-sudoku-{args.model}M-leftpad'
     out_dir = Path('workdir/finetune') / hp_name
     pretrain_path = args.pretrain_path
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
