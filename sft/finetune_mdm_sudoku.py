@@ -39,6 +39,7 @@ def parse_args():
     parse.add_argument('--nodes_num', type=int, default=1, help='number of devices')
     parse.add_argument('--n_gpu', type=int, default=4, help='number of gpu')
     parse.add_argument('--save_freq', type=int, default=200)
+    parse.add_argument('--postfix', type=str, default='')
     args = parse.parse_args()
     return args
 
@@ -104,7 +105,9 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'mdm-sudoku-{args.model}M-leftpad'
+    hp_name = f'mdm-sudoku-{args.model}M'
+    if args.postfix != '':
+        hp_name += f'-{args.postfix}'
     out_dir = Path('workdir/finetune') / hp_name
     pretrain_path = args.pretrain_path
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')

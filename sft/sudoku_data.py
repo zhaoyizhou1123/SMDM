@@ -36,6 +36,9 @@ def preprocess_sudoku(tokenizer, max_prompt_length=256, max_response_length=256)
         question = data['input']
         answer = data['output']
 
+        # replace newlines with spaces to save token length
+        answer = answer.replace('\n', ' ')
+
         question = tokenizer(question, return_tensors="pt")['input_ids'][0]
         if tokenizer.pad_token_id is not None:
             pad_token_id = tokenizer.pad_token_id
@@ -46,13 +49,16 @@ def preprocess_sudoku(tokenizer, max_prompt_length=256, max_response_length=256)
         question = torch.cat((q_padding, question), dim=-1) # left padding question
         # thought = tokenizer(thought, return_tensors="pt")['input_ids'][0]
         answer = tokenizer(answer, return_tensors="pt")['input_ids'][0]
+        # Remove bos token of answer
+        if answer[0] == tokenizer.bos_token_id:
+            answer = answer[1:]
         # answer = torch.cat((answer, torch.tensor([tokenizer.eos_token_id])), dim=-1)
 
         ans_length = answer.shape[-1]
-        if ans_length > max_response_length:
+        if ans_length - 1 > max_response_length: # keep at least one space for eos token
             # exclude prompts that are too long
             continue
-        ans_padding = torch.full((max_response_length - ans_length,), pad_token_id, dtype=answer.dtype)
+        ans_padding = torch.full((max_response_length - ans_length,), tokenizer.eos_token_id, dtype=answer.dtype)
         answer = torch.cat((answer, ans_padding), dim=-1)
 
         padded_data = torch.cat((question, answer), dim=-1)
@@ -63,3 +69,11 @@ def preprocess_sudoku(tokenizer, max_prompt_length=256, max_response_length=256)
     train_dataset = CustomDataset(train_dataset)
     print(f"Final Sudoku dataset size: {len(train_dataset)}")
     return train_dataset
+
+if __name__ == "__main__":
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
+                                              padding_side="right", use_fast=True)  
+
+    dataset = preprocess_sudoku(tokenizer)
+    print(dataset[0])

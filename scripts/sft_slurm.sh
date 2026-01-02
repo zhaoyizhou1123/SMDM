@@ -19,15 +19,15 @@
 #     --n_gpu 1 \
 #     --bs 256
 
-CUDA_VISIBLE_DEVICES=3 torchrun \
-    --nproc_per_node=1 \
+torchrun \
+    --nproc_per_node=$n_gpu \
     --node_rank=0 \
     --nnodes=1 \
     --master_port=29500 \
     sft/finetune_mdm_sudoku.py \
-    --model 336 \
-    --pretrain_path models/mdm-336M-100e18.safetensors \
-    --n_gpu 1 \
+    --model $PARAM \
+    --pretrain_path $MODEL \
+    --n_gpu $n_gpu \
     --bs 256 \
     --save_freq 5 \
-    --postfix v2
+    --postfix $POSTFIX

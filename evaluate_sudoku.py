@@ -17,7 +17,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--steps",
-        default=288,
+        default=256,
         type=int,
     )
     parser.add_argument(
@@ -32,7 +32,7 @@ def get_args():
     parser.add_argument(
         "--length",
         type=int,
-        default=544
+        default=512
     )
     parser.add_argument(
         "--cfg1",
@@ -55,7 +55,7 @@ def get_args():
 
 def get_diff_sample(args, question, model, tokenizer):
     print(f"Question: {question}")
-    question_ids = tokenizer(question, padding="max_length", max_length=256, truncation=True, return_tensors="pt")['input_ids'].to('cuda')
+    question_ids = tokenizer(question, padding="max_length", max_length=256, truncation=False, return_tensors="pt")['input_ids'].to('cuda')
     answer_ids = diff_sample(model,
                              tokenizer,
                              question_ids,
@@ -66,7 +66,7 @@ def get_diff_sample(args, question, model, tokenizer):
                              context_length=args.length,
                              device='cuda')
     answer = tokenizer.batch_decode(answer_ids, skip_special_tokens=False)
-    print(f"Answer length: {answer_ids.shape}")
+    # print(f"Answer length: {answer_ids}")
 
     # prefix_ids = tokenizer(prefix, padding="longest", truncation=True, return_tensors="pt")['input_ids'].to('cuda')
     # answer_ids = diff_sample(model,
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     batch_size = 1
 
     # dataset = load_dataset('json', data_files='data/gsm8k/test.jsonl')
-    dataset = load_dataset("zzy1123/sudoku_4x4", split="test")
+    dataset = load_dataset("zzy1123/sudoku_dedup", split="train")
     # length = len(dataset['train'])
     length = len(dataset)
     iter = length // batch_size if length % batch_size == 0 else length // batch_size + 1
