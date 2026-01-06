@@ -3,3 +3,4 @@ slurm/
 data/
 models/
 workdir/
+test.py

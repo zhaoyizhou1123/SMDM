@@ -70,6 +70,63 @@ def preprocess_sudoku(tokenizer, max_prompt_length=256, max_response_length=256)
     print(f"Final Sudoku dataset size: {len(train_dataset)}")
     return train_dataset
 
+def preprocess_sudoku_simple(tokenizer, max_prompt_length=256, max_response_length=16):
+    train_dataset = []
+
+    # data = []
+    file_path = 'zzy1123/sudoku_sft_short'
+    # with open(file_path, 'r') as f:
+    #     for line in f:
+    #         data.append(line)
+    dataset = load_dataset(file_path, split="train")
+
+    for data in dataset:
+        # d = data[i]
+
+        # if len(d.split('||')) != 2:
+        #     continue
+        # if len(d.split('||')[1].split('####')) != 2:
+        #     continue
+
+        # question, thought, answer = d.split('||')[0], d.split('||')[1].split('####')[0], d.split('####')[1]
+        question = data['input']
+        answer = data['output']
+
+        # replace newlines with spaces to save token length
+        answer = answer.replace('\n', ' ')
+
+        question = tokenizer(question, return_tensors="pt")['input_ids'][0]
+        if tokenizer.pad_token_id is not None:
+            pad_token_id = tokenizer.pad_token_id
+        else:
+            pad_token_id = 0
+        q_len = question.shape[-1]
+        q_padding = torch.full((max_prompt_length - q_len,), pad_token_id, dtype=question.dtype)
+        question = torch.cat((q_padding, question), dim=-1) # left padding question
+        # thought = tokenizer(thought, return_tensors="pt")['input_ids'][0]
+        answer = tokenizer(answer, return_tensors="pt")['input_ids'][0]
+        # Remove bos token of answer
+        if answer[0] == tokenizer.bos_token_id:
+            answer = answer[2:] # The first two tokens are not needed for tinyllama tokenizer
+        # answer = torch.cat((answer, torch.tensor([tokenizer.eos_token_id])), dim=-1)
+
+        ans_length = answer.shape[-1]
+        if ans_length > max_response_length: # keep at least one space for eos token
+            # exclude prompts that are too long
+            print(f"Warning: answer length {ans_length} exceeds max_response_length {max_response_length}, skipping.")
+            continue
+        ans_padding = torch.full((max_response_length - ans_length,), tokenizer.eos_token_id, dtype=answer.dtype)
+        answer = torch.cat((answer, ans_padding), dim=-1)
+
+        padded_data = torch.cat((question, answer), dim=-1)
+        train_dataset.append(dict(data=padded_data, input_length=max_prompt_length,
+                                  length=max_prompt_length + ans_length))
+
+
+    train_dataset = CustomDataset(train_dataset)
+    print(f"Final Sudoku dataset size: {len(train_dataset)}")
+    return train_dataset
+
 if __name__ == "__main__":
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
