@@ -3,4 +3,5 @@ slurm/
 data/
 models/
 workdir/
-test.py
+*.egg-info
+out/
