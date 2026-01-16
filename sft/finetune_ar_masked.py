@@ -23,7 +23,7 @@ from lit_gpt.speed_monitor import estimate_flops, measure_flops
 from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, num_parameters, step_csv_logger, lazy_load
 from pytorch_lightning.loggers import WandbLogger
 from lit_gpt import FusedCrossEntropyLoss
-from sharegpt_data import preprocess_sharegpt
+# from sharegpt_data import preprocess_sharegpt
 from transformers import AutoTokenizer
 import random
 import argparse
@@ -37,6 +37,10 @@ def parse_args():
     parse.add_argument('--epoch', type=int, default=3, help='training epoch')
     parse.add_argument('--pretrain_path', type=str, help='pretrain ckpt path')
     parse.add_argument('--task', type=str, default='ptr_follow')
+    parse.add_argument('--n_gpu', type=int, default=4, help='number of gpu')
+    parse.add_argument('--save_freq', type=int, default=200)
+    parse.add_argument('--r2l', action='store_true', help='train r2l model')
+    # parse.add_argument('--postfix', type=str, default='')
     args = parse.parse_args()
     return args
 
@@ -45,17 +49,18 @@ model_name = f'Diff_LLaMA_{args.model}M'  # config
 out_dir = Path('workdir')
 
 # Hyperparameters
-num_of_devices = 8
+num_of_devices = args.n_gpu
 global_batch_size = args.bs
 learning_rate = 2e-4
 if args.model <= 50:
     micro_batch_size = 16
 else:
     micro_batch_size = 8
+# micro_batch_size = 1
 max_step = int(55612 * args.epoch / global_batch_size) # 3 epochs
 warmup_steps = 200
-log_step_interval = 10
-save_step_interval = 5000
+log_step_interval = 1
+save_step_interval = args.save_freq
 
 weight_decay = 1e-1
 beta1 = 0.9
@@ -80,6 +85,28 @@ log_iter_interval = log_step_interval * gradient_accumulation_steps
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
 logger = step_csv_logger("out", model_name, flush_logs_every_n_steps=log_iter_interval)
 
+def forward_process_ar(batch, mask_token_id: int, prompt_length: torch.Tensor, response_length: torch.Tensor):
+    # Note: We assume response_length is the same across the batch
+    resp_length = response_length[0].item()
+    assert torch.all(response_length == resp_length), "All response lengths in the batch must be the same"
+    b, l = batch.shape
+    # t = torch.rand((b,), device=batch.device)
+    # n_mask = torch.randint(low=0, high=resp_length, size=(b,), device=batch.device)
+    n_mask = torch.full((b,), resp_length-1, device=batch.device)
+
+    # should be in [low, high)]
+    mask_id_high = (prompt_length + n_mask).unsqueeze(1).repeat(1, l)
+    mask_id_low = prompt_length.unsqueeze(1).repeat(1, l)
+
+    # p_mask = (1 - eps) * t + eps
+    # p_mask = p_mask[:, None].repeat(1, l)
+
+    # mask_indices = torch.rand((b, l), device=batch.device) < p_mask
+    pos_indices = torch.arange(l, device=batch.device).unsqueeze(0).repeat(b, 1)
+    mask_indices = (pos_indices < mask_id_high) & (pos_indices >= mask_id_low)
+    noisy_batch = torch.where(mask_indices, mask_token_id, batch)
+    return noisy_batch, mask_id_high
+
 
 def extract_number(filename):
     match = re.search(r'iter-(\d+)-ckpt\.pth', str(filename))
@@ -93,10 +120,12 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'arm-sharegpt-{args.model}M'
+    hp_name = f'arm-{args.model}M-masked-debug'
+    if args.r2l:
+        hp_name += '-r2l'
     out_dir = Path('workdir/finetune') / hp_name
     pretrain_path = args.pretrain_path
-    wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
+    wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project=f'ar_sft_{args.task}')
 
     precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
@@ -130,13 +159,18 @@ def main(fabric, pretrain_path, resume):
 
     config = Config.from_name(model_name)
 
-    filename = 'data/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json'
+    # filename = 'data/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json'
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
                                               padding_side="right", use_fast=True)
 
-    with open(filename) as f:
-        data = json.load(f)
-    train_set = preprocess_sharegpt(data, tokenizer)
+    # with open(filename) as f:
+    #     data = json.load(f)
+    if args.task == 'ptr_follow':
+        from ptr_follow_data import preprocess_ptr_follow_ar
+        train_set = preprocess_ptr_follow_ar(tokenizer, r2l=args.r2l)
+    else:
+        raise NotImplementedError(f"Task {args.task} not implemented")
+    # train_set = preprocess_sharegpt(data, tokenizer)
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
     train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
@@ -238,20 +272,35 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         iter_t0 = time.perf_counter()
         input_ids = train_data['data'] # [prompt + answer + padding]
+        # print(input_ids)
         prompt_length = train_data['input_length']  # prompt length
         length = train_data['length'] # [prompt + answer] length
         max_length = length.max().item()
         input_ids = input_ids[:, :max_length]
 
+        # total_dim = 32000 # not an elegant way
+        noisy_input, mask_id_high = forward_process_ar(input_ids, mask_token_id=0, prompt_length=prompt_length, response_length=length - prompt_length)
+
         is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
-            logits = model(input_ids)
+            # logits = model(input_ids)
+            print(noisy_input[0])
+            logits = model(noisy_input)
+            gen_tokens = torch.argmax(logits, dim=-1)
+            print(gen_tokens[0,-17:-1], input_ids[0,-16:])
 
             temp_tensor = torch.arange(logits.size(1), device=input_ids.device).expand(logits.size(0), logits.size(1))
-            logits_index = (temp_tensor >= (prompt_length - 1).unsqueeze(1)) & (temp_tensor < (length - 1).unsqueeze(1))
+            print(temp_tensor.shape)
+            # logits_index = (temp_tensor >= (prompt_length - 1).unsqueeze(1)) & (temp_tensor < (length - 1).unsqueeze(1)) 
+            # Only compute unmasked positions
+            logits_index = (temp_tensor >= mask_id_high - 1) & (temp_tensor < (length - 1).unsqueeze(1))   
+            print(torch.argmax(logits_index.to(torch.int32)))
             logits = logits[logits_index]
-            input_ids_index = (temp_tensor >= prompt_length.unsqueeze(1)) & (temp_tensor < length.unsqueeze(1))
+            # input_ids_index = (temp_tensor >= prompt_length.unsqueeze(1)) & (temp_tensor < length.unsqueeze(1))
+            input_ids_index = (temp_tensor >= mask_id_high) & (temp_tensor < length.unsqueeze(1))
+            print(torch.argmax(input_ids_index.to(torch.int32)))
             targets = input_ids[input_ids_index]
+            # print(targets[0])
             loss = loss_func(logits, targets)
             # loss = chunked_cross_entropy(logits, targets, chunk_size=0)
             fabric.backward(loss / gradient_accumulation_steps)
@@ -311,4 +360,4 @@ if __name__ == "__main__":
     # Uncomment this line if you see an error: "Expected is_sm80 to be true, but got false"
     # torch.backends.cuda.enable_flash_sdp(False)
     torch.set_float32_matmul_precision("high")
-    setup()
+    setup(devices=num_of_devices)

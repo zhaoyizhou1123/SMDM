@@ -23,7 +23,7 @@ from lit_gpt.speed_monitor import estimate_flops, measure_flops
 from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, num_parameters, step_csv_logger, lazy_load
 from pytorch_lightning.loggers import WandbLogger
 from lit_gpt import FusedCrossEntropyLoss
-from sharegpt_data import preprocess_sharegpt
+# from sharegpt_data import preprocess_sharegpt
 from transformers import AutoTokenizer
 import random
 import argparse
@@ -37,6 +37,10 @@ def parse_args():
     parse.add_argument('--epoch', type=int, default=3, help='training epoch')
     parse.add_argument('--pretrain_path', type=str, help='pretrain ckpt path')
     parse.add_argument('--task', type=str, default='ptr_follow')
+    parse.add_argument('--n_gpu', type=int, default=4, help='number of gpu')
+    parse.add_argument('--save_freq', type=int, default=200)
+    parse.add_argument('--r2l', action='store_true', help='train r2l model')
+    # parse.add_argument('--postfix', type=str, default='')
     args = parse.parse_args()
     return args
 
@@ -45,7 +49,7 @@ model_name = f'Diff_LLaMA_{args.model}M'  # config
 out_dir = Path('workdir')
 
 # Hyperparameters
-num_of_devices = 8
+num_of_devices = args.n_gpu
 global_batch_size = args.bs
 learning_rate = 2e-4
 if args.model <= 50:
@@ -54,8 +58,8 @@ else:
     micro_batch_size = 8
 max_step = int(55612 * args.epoch / global_batch_size) # 3 epochs
 warmup_steps = 200
-log_step_interval = 10
-save_step_interval = 5000
+log_step_interval = 1
+save_step_interval = args.save_freq
 
 weight_decay = 1e-1
 beta1 = 0.9
@@ -93,10 +97,12 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'arm-sharegpt-{args.model}M'
+    hp_name = f'arm-{args.model}M'
+    if args.r2l:
+        hp_name += '-r2l'
     out_dir = Path('workdir/finetune') / hp_name
     pretrain_path = args.pretrain_path
-    wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='scaling')
+    wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project=f'ar_sft_{args.task}')
 
     precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
@@ -130,13 +136,18 @@ def main(fabric, pretrain_path, resume):
 
     config = Config.from_name(model_name)
 
-    filename = 'data/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json'
+    # filename = 'data/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json'
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
                                               padding_side="right", use_fast=True)
 
-    with open(filename) as f:
-        data = json.load(f)
-    train_set = preprocess_sharegpt(data, tokenizer)
+    # with open(filename) as f:
+    #     data = json.load(f)
+    if args.task == 'ptr_follow':
+        from ptr_follow_data import preprocess_ptr_follow_ar
+        train_set = preprocess_ptr_follow_ar(tokenizer, r2l=args.r2l)
+    else:
+        raise NotImplementedError(f"Task {args.task} not implemented")
+    # train_set = preprocess_sharegpt(data, tokenizer)
 
     fabric.seed_everything(3407)  # same seed for every process to init model (FSDP)
     train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
@@ -238,8 +249,8 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         iter_t0 = time.perf_counter()
         input_ids = train_data['data'] # [prompt + answer + padding]
-        prompt_length = train_data['input_length']  # prompt length
-        length = train_data['length'] # [prompt + answer] length
+        prompt_length = train_data['input_length']  # prompt length (torch.Tensor)
+        length = train_data['length'] # [prompt + answer] length (torch.Tensor)
         max_length = length.max().item()
         input_ids = input_ids[:, :max_length]
 
@@ -311,4 +322,4 @@ if __name__ == "__main__":
     # Uncomment this line if you see an error: "Expected is_sm80 to be true, but got false"
     # torch.backends.cuda.enable_flash_sdp(False)
     torch.set_float32_matmul_precision("high")
-    setup()
+    setup(devices=num_of_devices)
