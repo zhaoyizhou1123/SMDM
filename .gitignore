@@ -5,3 +5,4 @@ models/
 workdir/
 *.egg-info
 out/
+log.txt

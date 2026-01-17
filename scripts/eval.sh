@@ -4,7 +4,7 @@
 # CKPT_PATH=/home/zhaoyiz/projects/SMDM/workdir/finetune/mdm-sudoku-336M/iter-160000-ckpt.pth
 # CKPT_PATH=/home/zhaoyiz/projects/SMDM/workdir/finetune/mdm-sudoku_simple-336M/iter-000320-ckpt.pth
 # CKPT_PATH=/home/zhaoyiz/projects/SMDM/workdir/finetune/mdm-ptr_follow-336M/iter-024000-ckpt.pth
-CKPT_PATH=/home/zhaoyiz/projects/SMDM/workdir/finetune/mdm-ptr_follow_reverse_order_v2-336M/iter-000160-ckpt.pth
+CKPT_PATH=/home/zhaoyiz/projects/SMDM/workdir/finetune/mdm-ptr_follow_reverse_order_v2-336M/iter-000160-ckpt.safetensors
 # if pth path, convert to safetensors
 if [[ $CKPT_PATH == *.pth ]]; then
     SAFETENSOR_PATH=${CKPT_PATH%.pth}.safetensors

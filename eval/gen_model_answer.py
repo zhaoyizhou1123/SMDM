@@ -125,6 +125,102 @@ def diff_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', steps
 
     return x
 
+@ torch.no_grad()
+def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1, alg='origin', steps=512, temperature=1., response_length=16, eps=1e-5, mask_token_id = 0, device='cuda'):
+    print("Prompt shape", prompt.shape)
+    batch_size = batch_size if prompt is None else prompt.shape[0]
+    prompt_length = prompt.shape[1]
+    context_length = prompt_length + response_length
+    x_l2r = torch.full((batch_size, context_length), mask_token_id, dtype=torch.long).to(device)
+    x_l2r[:, :prompt_length] = prompt.clone()
+    x_r2l = x_l2r.clone()
+
+    # timesteps = torch.linspace(1, eps, steps + 1, device='cuda')
+    # We simply decode 1 token at each step
+    for i in range(response_length):
+        resp_ids = x_l2r[:, prompt_length:]
+        resp_mask_index = (resp_ids == mask_token_id) # (b, resp_len)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            resp_logits_l2r = model_l2r(x_l2r)[:, prompt_length-1:-1] # (b, resp_len, vocab_size)
+            resp_logits_r2l = model_r2l(x_r2l)[:, prompt_length-1:-1]
+            resp_logits_r2l = resp_logits_r2l.flip(dims=[1]) # reverse the response logits for r2l
+
+        # t = timesteps[i]
+        # s = timesteps[i + 1]
+
+        if alg == 'low_confidence':
+
+            def sample_from_logits(logits):
+                if temperature < 1e-4:
+                    logits_with_noise = logits
+                else:
+                    logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+                x0 = torch.argmax(logits_with_noise, dim=-1)
+
+                logits = logits.to(torch.float64)
+                p = F.log_softmax(logits, dim=-1)
+                confidence = torch.gather(p, dim=-1, index=x0.unsqueeze(-1)).squeeze(dim=-1)
+                return x0, confidence
+            x0_l2r, confidence_l2r = sample_from_logits(resp_logits_l2r)
+            x0_r2l, confidence_r2l = sample_from_logits(resp_logits_r2l)
+            number_transfer_tokens = 1
+            if number_transfer_tokens > 0:
+                # Get confidence by taking max from both directions
+                confidence = torch.max(confidence_l2r, confidence_r2l)
+                # Get x0 according to which direction has higher confidence
+                x0 = torch.where(confidence_l2r >= confidence_r2l, x0_l2r, x0_r2l)
+                # confidence = confidence_r2l # (b, resp_len)
+                # x0 = x0_r2l # (b, resp_len)
+
+                # modify confidence of unmasked tokens to -inf so they won't be selected
+                confidence = torch.where(resp_mask_index, confidence, float('-inf'))
+                _, transfer_index = torch.topk(confidence, number_transfer_tokens) # (b, number_transfer_tokens)
+                transfer_ids = torch.gather(x0, dim=-1, index=transfer_index) # (b, number_transfer_tokens)
+                row_index = torch.arange(batch_size).unsqueeze(-1) # (b, 1)
+                x_l2r[row_index, transfer_index + prompt_length] = transfer_ids
+                transfer_index_r2l = response_length - 1 - transfer_index
+                x_r2l[row_index, transfer_index_r2l + prompt_length] = transfer_ids
+        else:
+            raise NotImplementedError(alg)
+
+    return x_l2r
+
+def generate(model, tokenizer, input_ids, max_new_tokens=16):
+    # append input_ids with mask token id of length max_new_tokens
+    prompt_length = input_ids.shape[1]
+    mask_token_id = 0
+    mask_tokens = torch.full((input_ids.size(0), max_new_tokens), mask_token_id, dtype=input_ids.dtype, device=input_ids.device)
+    input_ids = torch.cat([input_ids, mask_tokens], dim=1)
+    # 2. Inference Loop
+    decode_orders = []
+    for i in range(max_new_tokens):
+        gen_ids = input_ids[:, prompt_length:]
+        mask = (gen_ids == mask_token_id) # only decode mask tokens
+        with torch.no_grad():
+            # Get logits from the model
+            outputs = model(input_ids)
+        logits = outputs.logits if hasattr(outputs, 'logits') else outputs
+        logprobs = torch.log_softmax(logits[:, -max_new_tokens-1:-1, :], dim=-1)
+        
+        # Focus on the response tokens
+        resp_token_logits = logits[:, -max_new_tokens-1:-1, :]
+        
+        # Simple Greedy Decoding (argmax)
+        # You can replace this with top-k or top-p sampling if needed
+        resp_token_id = torch.argmax(resp_token_logits, dim=-1) # (b, max_new_tokens)
+        token_logprobs = torch.gather(logprobs, -1, resp_token_id.unsqueeze(-1)).squeeze(-1)
+        token_logprobs = torch.where(mask, token_logprobs, float('-inf'))
+        # print("Probability", token_logprobs)
+        decode_pos = torch.argmax(token_logprobs, dim=-1) # (b,)
+
+        for j in range(decode_pos.shape[0]):
+            p = decode_pos[j]
+            decode_orders.append(p.item())
+            # use a predefined order
+            input_ids[j, prompt_length + p] = resp_token_id[j, p]
+    print("Decode Order:", decode_orders)
+    return input_ids
+
 
 def run_eval(
     model_path,

@@ -90,9 +90,8 @@ def forward_process_ar(batch, mask_token_id: int, prompt_length: torch.Tensor, r
     resp_length = response_length[0].item()
     assert torch.all(response_length == resp_length), "All response lengths in the batch must be the same"
     b, l = batch.shape
-    # t = torch.rand((b,), device=batch.device)
-    # n_mask = torch.randint(low=0, high=resp_length, size=(b,), device=batch.device)
-    n_mask = torch.full((b,), resp_length-1, device=batch.device)
+    n_mask = torch.randint(low=0, high=resp_length, size=(b,), device=batch.device)
+    # n_mask = torch.full((b,), resp_length-1, device=batch.device)
 
     # should be in [low, high)]
     mask_id_high = (prompt_length + n_mask).unsqueeze(1).repeat(1, l)
@@ -120,7 +119,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'arm-{args.model}M-masked-debug'
+    hp_name = f'arm-{args.model}M-masked'
     if args.r2l:
         hp_name += '-r2l'
     out_dir = Path('workdir/finetune') / hp_name
@@ -272,7 +271,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
 
         iter_t0 = time.perf_counter()
         input_ids = train_data['data'] # [prompt + answer + padding]
-        # print(input_ids)
+        # print("Input ids", input_ids)
         prompt_length = train_data['input_length']  # prompt length
         length = train_data['length'] # [prompt + answer] length
         max_length = length.max().item()
@@ -284,21 +283,21 @@ def train(fabric, state, train_dataloader, monitor, resume):
         is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
             # logits = model(input_ids)
-            print(noisy_input[0])
+            # print("Noisy input", noisy_input[0])
             logits = model(noisy_input)
-            gen_tokens = torch.argmax(logits, dim=-1)
-            print(gen_tokens[0,-17:-1], input_ids[0,-16:])
+            # gen_tokens = torch.argmax(logits, dim=-1)
+            # print("Gen vs Target", gen_tokens[0,-17:-1], input_ids[0,-16:])
 
             temp_tensor = torch.arange(logits.size(1), device=input_ids.device).expand(logits.size(0), logits.size(1))
-            print(temp_tensor.shape)
+            # print(temp_tensor.shape)
             # logits_index = (temp_tensor >= (prompt_length - 1).unsqueeze(1)) & (temp_tensor < (length - 1).unsqueeze(1)) 
             # Only compute unmasked positions
             logits_index = (temp_tensor >= mask_id_high - 1) & (temp_tensor < (length - 1).unsqueeze(1))   
-            print(torch.argmax(logits_index.to(torch.int32)))
+            # print(torch.argmax(logits_index.to(torch.int32)))
             logits = logits[logits_index]
             # input_ids_index = (temp_tensor >= prompt_length.unsqueeze(1)) & (temp_tensor < length.unsqueeze(1))
             input_ids_index = (temp_tensor >= mask_id_high) & (temp_tensor < length.unsqueeze(1))
-            print(torch.argmax(input_ids_index.to(torch.int32)))
+            # print(torch.argmax(input_ids_index.to(torch.int32)))
             targets = input_ids[input_ids_index]
             # print(targets[0])
             loss = loss_func(logits, targets)
