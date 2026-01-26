@@ -14,7 +14,8 @@ from functools import partial
 wd = Path(__file__).parent.parent.resolve()
 sys.path.append(str(wd))
 # from apex.optimizers import FusedAdam #torch optimizer has a cuda backend, which is faster actually
-from lit_gpt.model import GPT, Block, Config, CausalSelfAttention
+from lit_gpt.model import Config
+from lit_gpt.datmodel import DualStreamGPT, DualStreamBlock, FusedDualBlock
 from lit_gpt.packed_dataset import CombinedDataset, PackedDataset
 from lit_gpt.speed_monitor import SpeedMonitorFabric as Monitor
 from lit_gpt.speed_monitor import estimate_flops, measure_flops
@@ -65,7 +66,7 @@ max_step = int(args.flops * 1e12 / (6 * model_para_config[f'{args.model}'] * glo
 warmup_steps = int(max_step / 100) if int(max_step / 100) > 100 else 100
 log_step_interval = 10
 eval_iters = int(100 * 1024 / global_batch_size)
-save_step_interval = 5000
+save_step_interval = 1000
 eval_step_interval = 999999999999 #inf
 
 
@@ -102,6 +103,9 @@ val_data_config = [
 hparams = {k: v for k, v in locals().items() if isinstance(v, (int, float, str)) and not k.startswith("_")}
 logger = step_csv_logger("out", model_name, flush_logs_every_n_steps=log_iter_interval)
 
+BOS_TOKEN_ID = 1
+EOS_TOKEN_ID = 2
+
 
 def setup(
     devices: int = 8,
@@ -112,7 +116,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'arm-{args.model}M-{args.flops}'
+    hp_name = f'dat-{args.model}M-{args.flops}'
     out_dir = Path('workdir/pretrain') / hp_name
     wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project='pretrain-smdm')
 
@@ -125,7 +129,7 @@ def setup(
             strategy = XLAStrategy(sync_module_states=False)
         else:
             strategy = FSDPStrategy(
-                auto_wrap_policy={Block},
+                auto_wrap_policy={DualStreamBlock, FusedDualBlock},
                 activation_checkpointing_policy=None,
                 state_dict_type="full",
                 limit_all_gathers=True,
@@ -138,6 +142,7 @@ def setup(
     fabric.print(hparams)
     fabric.launch(main, train_data_dir, val_data_dir, resume)
     # main(fabric, train_data_dir, val_data_dir, resume)
+    
 
 
 def main(fabric, train_data_dir, val_data_dir, resume):
@@ -166,7 +171,7 @@ def main(fabric, train_data_dir, val_data_dir, resume):
     fabric.print(f"Loading model with {config.__dict__}")
     t0 = time.perf_counter()
     with fabric.init_module(empty_init=False):
-        model = GPT(config)
+        model = DualStreamGPT(config)
         model.apply(partial(model._init_weights ,n_layer=config.n_layer))
  
 
@@ -210,7 +215,7 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
     #     validate(fabric, model, val_dataloader)  # sanity check
 
     with torch.device("meta"):
-        meta_model = GPT(model.config)
+        meta_model = DualStreamGPT(model.config)
         # "estimated" is not as precise as "measured". Estimated is optimistic but widely used in the wild.
         # When comparing MFU or FLOP numbers with other projects that use estimated FLOPs,
         # consider passing `SpeedMonitor(flops_per_batch=estimated_flops)` instead
@@ -256,12 +261,24 @@ def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
 
         iter_t0 = time.perf_counter()
 
-        input_ids = train_data[:, 0 : model.config.block_size].contiguous()
-        targets = train_data[:, 1 : model.config.block_size + 1].contiguous()
+        # Input and target is the same for DAT. We need two extra tokens for <bos> and <eos>
+        raw_input_ids = train_data[:, 0 : model.config.block_size-2].contiguous()
+        # targets = train_data[:, 1 : model.config.block_size + 1].contiguous()
+
+        # Add bos and eos tokens
+        bos_tokens = torch.full((raw_input_ids.size(0), 1), BOS_TOKEN_ID, dtype=raw_input_ids.dtype, device=raw_input_ids.device)
+        eos_tokens = torch.full((raw_input_ids.size(0), 1), EOS_TOKEN_ID, dtype=raw_input_ids.dtype, device=raw_input_ids.device)
+        input_ids = torch.cat([bos_tokens, raw_input_ids, eos_tokens], dim=1)
+        
         is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
+            # logits = model(input_ids)[:, 1:-1, :] # predict tokens except bos and eos
             logits = model(input_ids)
-            loss = loss_func(logits, targets)
+            # print("Cross entropy loss", logits.size(), raw_input_ids.size())
+            # Modify left and right tokens as ignore index. This is more efficient than slicing
+            input_ids[:, 0] = loss_func.ignore_index
+            input_ids[:, -1] = loss_func.ignore_index
+            loss = loss_func(logits, input_ids)
             # loss = chunked_cross_entropy(logits, targets, chunk_size=0)
             fabric.backward(loss / gradient_accumulation_steps)
 

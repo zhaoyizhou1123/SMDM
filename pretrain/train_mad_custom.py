@@ -1,3 +1,5 @@
+# The code is incomplete. Sequential masking the input is not enough to achieve any-order decoding.
+
 import glob
 import math
 import sys
@@ -162,8 +164,8 @@ def setup(
 
     fabric = L.Fabric(devices=devices, strategy=strategy, precision=precision, loggers=[logger, wandb_logger])
     fabric.print(hparams)
-    #fabric.launch(main, train_data_dir, val_data_dir, resume)
-    main(fabric, train_data_dir, val_data_dir, resume)
+    fabric.launch(main, train_data_dir, val_data_dir, resume)
+    # main(fabric, train_data_dir, val_data_dir, resume)
 
 
 def main(fabric, train_data_dir, val_data_dir, resume):

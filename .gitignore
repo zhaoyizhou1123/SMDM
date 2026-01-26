@@ -6,3 +6,4 @@ workdir/
 *.egg-info
 out/
 log.txt
+debug/
