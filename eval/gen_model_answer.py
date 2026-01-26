@@ -127,7 +127,7 @@ def diff_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', steps
 
 @ torch.no_grad()
 def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1, alg='origin', steps=512, temperature=1., response_length=16, eps=1e-5, mask_token_id = 0, device='cuda'):
-    print("Prompt shape", prompt.shape)
+    # print("Prompt shape", prompt.shape)
     batch_size = batch_size if prompt is None else prompt.shape[0]
     prompt_length = prompt.shape[1]
     context_length = prompt_length + response_length
@@ -137,6 +137,9 @@ def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1,
 
     # timesteps = torch.linspace(1, eps, steps + 1, device='cuda')
     # We simply decode 1 token at each step
+    order = []
+    gen_model = []
+    gt_order = [7,8,6,9,5,10,4,11,3,12,2,13,1,14,0,15]  # for response_length=16
     for i in range(response_length):
         resp_ids = x_l2r[:, prompt_length:]
         resp_mask_index = (resp_ids == mask_token_id) # (b, resp_len)
@@ -147,7 +150,6 @@ def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1,
 
         # t = timesteps[i]
         # s = timesteps[i + 1]
-
         if alg == 'low_confidence':
 
             def sample_from_logits(logits):
@@ -169,20 +171,33 @@ def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1,
                 confidence = torch.max(confidence_l2r, confidence_r2l)
                 # Get x0 according to which direction has higher confidence
                 x0 = torch.where(confidence_l2r >= confidence_r2l, x0_l2r, x0_r2l)
+                model_id = torch.argmax(torch.stack([confidence_l2r, confidence_r2l], dim=0), dim=0) # (b, resp_len)
+
                 # confidence = confidence_r2l # (b, resp_len)
                 # x0 = x0_r2l # (b, resp_len)
 
+                # confidence = confidence_r2l if i % 2 == 0 else confidence_l2r
+                # x0 = x0_r2l if i % 2 == 0 else x0_l2r
+
                 # modify confidence of unmasked tokens to -inf so they won't be selected
                 confidence = torch.where(resp_mask_index, confidence, float('-inf'))
+
                 _, transfer_index = torch.topk(confidence, number_transfer_tokens) # (b, number_transfer_tokens)
+                # transfer_index = torch.tensor([[gt_order[i]] for _ in range(batch_size)], device='cuda')  # (b, 1)
+
+                order.append(transfer_index[0,0].item())
+                model_used = model_id[0, transfer_index[0,0]].item()
+                gen_model.append('L2R' if model_used == 0 else 'R2L')
                 transfer_ids = torch.gather(x0, dim=-1, index=transfer_index) # (b, number_transfer_tokens)
                 row_index = torch.arange(batch_size).unsqueeze(-1) # (b, 1)
                 x_l2r[row_index, transfer_index + prompt_length] = transfer_ids
+                # print("Step", i, "Transfer index L2R:", x_l2r[0,-16:].to('cpu').tolist())
                 transfer_index_r2l = response_length - 1 - transfer_index
                 x_r2l[row_index, transfer_index_r2l + prompt_length] = transfer_ids
         else:
             raise NotImplementedError(alg)
-
+    print(f"Order: {order}")
+    print(f"Model used: {gen_model}")
     return x_l2r
 
 def generate(model, tokenizer, input_ids, max_new_tokens=16):

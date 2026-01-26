@@ -54,6 +54,11 @@ def get_args():
         default=0.1,
         type=float,
     )
+    parser.add_argument(
+        "--data_path",
+        type=str,
+        default='zzy1123/ptr_follow_reverse_order_rl'
+    )
     args = parser.parse_args()
     return args
 
@@ -116,8 +121,8 @@ def get_question(prompt):
 def get_reward(reward_dict):
     return reward_dict['ground_truth']
 
-def get_dataset():
-    dataset = load_dataset("zzy1123/ptr_follow_reverse_order_rl", split="train")
+def get_dataset(data_path):
+    dataset = load_dataset(data_path, split="train")
     return dataset
 
 
@@ -147,7 +152,7 @@ if __name__ == "__main__":
 
     # dataset = load_dataset('json', data_files='data/gsm8k/test.jsonl')
     # dataset = load_dataset("zzy1123/ptr_follow_reverse_order_rl", split="train")
-    dataset = get_dataset()
+    dataset = get_dataset(args.data_path)
     # length = len(dataset['train'])
     length = len(dataset)
     iter = length // batch_size if length % batch_size == 0 else length // batch_size + 1
