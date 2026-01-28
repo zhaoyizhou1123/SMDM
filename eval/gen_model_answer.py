@@ -200,6 +200,58 @@ def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1,
     print(f"Model used: {gen_model}")
     return x_l2r
 
+@ torch.no_grad()
+def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', steps=512, temperature=1., cfg_scale=2.,
+                response_length=16, eps=1e-5, dim=32000, device='cuda'):
+    batch_size = batch_size if prompt is None else prompt.shape[0]
+    prompt_length = prompt.shape[1]
+    context_length = prompt_length + response_length
+    x = torch.full((batch_size, context_length), dim, dtype=torch.long).to(device)
+    x[:, :prompt.shape[1]] = prompt.clone()
+
+    timesteps = torch.linspace(1, eps, steps + 1, device='cuda')
+    history = []
+    for i in range(steps):
+        mask_index = (x == dim)
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            logits = model(x)
+            masked_logits = logits[mask_index]
+
+        t = timesteps[i]
+        s = timesteps[i + 1]
+
+        if alg == 'origin':
+            p_transfer = 1 - s / t if i < steps - 1 else 1
+            x0 = torch.zeros_like(x[mask_index], device=device, dtype=torch.long) + dim
+            transfer_index_t_s = torch.rand(*x0.shape, device='cuda') < p_transfer
+            logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+            x_decode = torch.argmax(logits_with_noise, dim=-1) # full length
+            history.append(x_decode[:, prompt_length:].cpu())
+            x0[transfer_index_t_s] = x_decode[mask_index][transfer_index_t_s].clone()
+            x[mask_index] = x0.clone()
+        elif alg == 'greddy':
+            logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+            x_decode = torch.argmax(logits_with_noise, dim=-1) # full length
+            history.append(x_decode[:, prompt_length:].cpu())
+
+            x0 = x_decode[mask_index]
+
+            masked_logits = masked_logits.to(torch.float64)
+            p = F.softmax(masked_logits, dim=-1)
+            confidence = torch.gather(p, dim=-1, index=torch.unsqueeze(x0, -1)).squeeze(dim=-1)
+            num_mask_token = mask_index.sum()
+            number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+            if number_transfer_tokens > 0:
+                _, transfer_index = torch.topk(confidence, number_transfer_tokens)
+                x0_ = torch.zeros_like(x0, device=device, dtype=torch.long) + dim
+                x0_[transfer_index] = x0[transfer_index].clone()
+                x[mask_index] = x0_
+        else:
+            raise NotImplementedError(alg)
+
+    return x, history
+
+
 def generate(model, tokenizer, input_ids, max_new_tokens=16):
     # append input_ids with mask token id of length max_new_tokens
     prompt_length = input_ids.shape[1]

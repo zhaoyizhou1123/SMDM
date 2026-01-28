@@ -71,6 +71,11 @@ def preprocess_ptr_follow(tokenizer, max_prompt_length=256, max_response_length=
     return train_dataset
 
 def preprocess_ptr_follow_ar(tokenizer, max_prompt_length=256, max_response_length=16, r2l=False, order='reverse'):
+    '''
+    support different order.
+    Pad token id is 1.
+    '''
+
     train_dataset = []
 
     # data = []

@@ -56,10 +56,13 @@ class DualStreamGPTV2(nn.Module):
 
     def forward(self, idx: torch.Tensor, max_seq_length: Optional[int] = None, attn_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, T = idx.size()
+
+        x_embd = self.wte(idx)
         
         # 1. Shifting logic
         zero_token = torch.zeros((B, 1), dtype=idx.dtype, device=idx.device)
-        idx_fwd = torch.cat([zero_token, idx[:, :-1]], dim=1)
+        # idx_fwd = torch.cat([zero_token, idx[:, :-1]], dim=1)
+        # x_fwd = self.wte(idx_fwd)
         idx_bwd_raw = torch.cat([idx[:, 1:], zero_token], dim=1)
         idx_bwd_flipped = torch.flip(idx_bwd_raw, dims=[1])
         
@@ -74,7 +77,6 @@ class DualStreamGPTV2(nn.Module):
         combined_mask = torch.cat([m_fwd, m_bwd], dim=0).view(2*B, 1, 1, T)
 
         # 3. Embed and Batch-stack: [2*B, T, half_dim]
-        x_fwd = self.wte(idx_fwd)
         x_bwd = self.wte(idx_bwd_flipped)
         x = torch.cat([x_fwd, x_bwd], dim=0)
 
