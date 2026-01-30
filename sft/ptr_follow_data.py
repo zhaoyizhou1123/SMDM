@@ -13,11 +13,11 @@ class CustomDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
-def preprocess_ptr_follow(tokenizer, max_prompt_length=256, max_response_length=16):
+def preprocess_ptr_follow(tokenizer, max_prompt_length=256, max_response_length=16, order='reverse'):
     train_dataset = []
 
     # data = []
-    file_path = 'zzy1123/ptr_follow_reverse_order_sft'
+    file_path = f'zzy1123/ptr_follow_{order}_order_sft'
     # with open(file_path, 'r') as f:
     #     for line in f:
     #         data.append(line)

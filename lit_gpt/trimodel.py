@@ -92,10 +92,12 @@ class TriGPT(nn.Module):
         # Part A: G attends to H (Strict Past: j < i)
         # Cols 0..T. Lower triangle EXCLUDING diagonal
         mask[2*T:3*T, :T] = torch.tril(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=-1)
+        # mask[2*T:3*T, :T] = torch.tril(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=0)
         
         # Part B: G attends to B (Strict Future: j > i)
         # Cols T..2*T. Upper triangle EXCLUDING diagonal
         mask[2*T:3*T, T:2*T] = torch.triu(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1)
+        # mask[2*T:3*T, T:2*T] = torch.triu(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=0)
 
         # Expand for batch and head dimensions: (1, 1, 3*T, 3*T)
         return mask.unsqueeze(0).unsqueeze(0)
@@ -231,8 +233,7 @@ class CausalSelfAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
         input_pos: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        # print(f"CausalSelfAttention.forward: x.shape = {x.shape}")
-        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        B, T, C = x.size()  # batch size, 3*sequence length, embedding dimensionality (n_embd)
 
         qkv = self.attn(x)
 
@@ -289,7 +290,8 @@ class CausalSelfAttention(nn.Module):
         q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
-        if q.size() != k.size():
+        # if q.size() != k.size():
+        if q.shape[1] != k.shape[1]:
              k = k.repeat_interleave(q.shape[1]//k.shape[1], dim=1)
              v = v.repeat_interleave(q.shape[1]//v.shape[1], dim=1)
         

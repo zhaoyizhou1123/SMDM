@@ -112,7 +112,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'trigpt-{args.model}M-{args.order}'
+    hp_name = f'trigpt-{args.model}M-naive-{args.order}'
     if args.r2l:
         hp_name += '-r2l'
     if args.postfix != '':
@@ -248,6 +248,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
                 yield data
     train_dataloader_ = get_train_dataloader(train_dataloader)
             
+    # loss_func = CrossEntropyLoss(reduction='none')
     loss_func = FusedCrossEntropyLoss()
     for train_data in train_dataloader_:
         # resume loader state. This is not elegant but it works. Should rewrite it in the future.
@@ -276,16 +277,18 @@ def train(fabric, state, train_dataloader, monitor, resume):
         max_length = length.max().item()
         input_ids = input_ids[:, :max_length]
 
-        noisy_input, _ = forward_process(input_ids, total_dim = 32000)
-        temp_tensor = torch.arange(noisy_input.size(1), device=noisy_input.device).expand(noisy_input.size(0), noisy_input.size(1))
-        prompt_index = (temp_tensor < prompt_length.unsqueeze(1))
-        noisy_input[prompt_index] = input_ids[prompt_index].clone()
+        # total_dim = 32000
+        # noisy_input, p_mask = forward_process(input_ids, total_dim = total_dim)
+        # temp_tensor = torch.arange(noisy_input.size(1), device=noisy_input.device).expand(noisy_input.size(0), noisy_input.size(1))
+        # prompt_index = (temp_tensor < prompt_length.unsqueeze(1))
+        # noisy_input[prompt_index] = input_ids[prompt_index].clone()
+        # mask_indices = (noisy_input == total_dim)
 
         is_accumulating = (state["iter_num"] + 1) % gradient_accumulation_steps != 0
         with fabric.no_backward_sync(model, enabled=is_accumulating):
-            # logits = model(input_ids)
+            logits = model(input_ids)
             # print("Noisy input", noisy_input[0])
-            logits = model(noisy_input)
+            # logits = model(noisy_input)
             # gen_tokens = torch.argmax(logits, dim=-1)
             # print("Gen vs Target", gen_tokens[0,-17:-1], input_ids[0,-16:])
 

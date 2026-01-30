@@ -19,14 +19,38 @@
 #     --n_gpu 1 \
 #     --bs 256
 
-CUDA_VISIBLE_DEVICES=8 torchrun \
-    --nproc_per_node=1 \
+# CUDA_VISIBLE_DEVICES=8,9 torchrun \
+#     --nproc_per_node=2 \
+#     --node_rank=0 \
+#     --nnodes=1 \
+#     --master_port=29500 \
+#     sft/finetune_mdm_ptr_follow.py \
+#     --model 336 \
+#     --pretrain_path models/mdm-336M-100e18.safetensors \
+#     --n_gpu 2 \
+#     --bs 256 \
+#     --save_freq 50
+
+# CUDA_VISIBLE_DEVICES=8 torchrun \
+#     --nproc_per_node=1 \
+#     --node_rank=0 \
+#     --nnodes=1 \
+#     --master_port=29500 \
+#     sft/finetune_mdm_ptr_follow.py \
+#     --model 206 \
+#     --pretrain_path None \
+#     --n_gpu 1 \
+#     --bs 256 \
+#     --save_freq 10
+
+CUDA_VISIBLE_DEVICES=8,9 torchrun \
+    --nproc_per_node=2 \
     --node_rank=0 \
     --nnodes=1 \
     --master_port=29500 \
-    sft/finetune_mdm_ptr_follow.py \
+    sft/finetune_trigpt_ptr_follow_debug.py \
     --model 336 \
     --pretrain_path models/mdm-336M-100e18.safetensors \
-    --n_gpu 1 \
+    --n_gpu 2 \
     --bs 256 \
-    --save_freq 1
+    --save_freq 50

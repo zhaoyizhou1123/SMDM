@@ -49,6 +49,11 @@ def get_args():
         default=0.1,
         type=float,
     )
+    parser.add_argument(
+        '--alg',
+        type=str,
+        default='greddy'
+    )
 
     parser.add_argument(
         "--data_path",
@@ -65,7 +70,7 @@ def get_trigpt_sample(args, question, model, tokenizer):
     answer_ids, history = trigpt_sample(model,
                              tokenizer,
                              question_ids,
-                             alg='greddy',
+                             alg=args.alg,
                              steps=args.steps,
                              temperature=args.temperature,
                              cfg_scale=args.cfg1,
@@ -135,6 +140,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T', padding_side="left", use_fast=True)
     # tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     tokenizer.pad_token_id = 0
+    tokenizer.add_special_tokens({'mask_token': ' m'})
 
     model = TriGPT(config).to(device)
     if args.ckpt_path.endswith('.safetensors'):
@@ -166,7 +172,8 @@ if __name__ == "__main__":
 
         for index in range(len(questions)):
             print(preds[index])
-            print(f'Ground truth answers:\n', f'{right_answers[index]}\n')
+            print()
+            print(f'Ground truth answers: {right_answers[index]}')
             for step, h in enumerate(history):
                 print(f'Step {step}: {h}')
             print(f'***************************************************')

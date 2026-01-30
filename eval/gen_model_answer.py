@@ -211,6 +211,7 @@ def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', ste
 
     timesteps = torch.linspace(1, eps, steps + 1, device='cuda')
     history = []
+    conf_record = torch.full((batch_size, response_length), -1e10, device='cuda', dtype=torch.float64)
     for i in range(steps):
         mask_index = (x == dim)
         with torch.cuda.amp.autocast(dtype=torch.bfloat16):
@@ -232,7 +233,7 @@ def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', ste
         elif alg == 'greddy':
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
             x_decode = torch.argmax(logits_with_noise, dim=-1) # full length
-            history.append(x_decode[:, prompt_length:].cpu())
+            # history.append(x_decode[:, prompt_length:].cpu())
 
             x0 = x_decode[mask_index]
 
@@ -240,12 +241,46 @@ def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', ste
             p = F.softmax(masked_logits, dim=-1)
             confidence = torch.gather(p, dim=-1, index=torch.unsqueeze(x0, -1)).squeeze(dim=-1)
             num_mask_token = mask_index.sum()
-            number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+            # number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+            number_transfer_tokens = 1
             if number_transfer_tokens > 0:
                 _, transfer_index = torch.topk(confidence, number_transfer_tokens)
                 x0_ = torch.zeros_like(x0, device=device, dtype=torch.long) + dim
                 x0_[transfer_index] = x0[transfer_index].clone()
                 x[mask_index] = x0_
+            history.append(x[:, prompt_length:].cpu())
+        elif alg == 'dyn_greedy':
+            resp_logits = logits[:, prompt_length:, :] # only response part
+            logits_with_noise = add_gumbel_noise(resp_logits, temperature=temperature)
+            x_decode = torch.argmax(logits_with_noise, dim=-1) # (b,resp_len)
+            # history.append(x_decode.cpu())
+
+            resp_logits = resp_logits.to(torch.float64)
+            p = F.softmax(resp_logits, dim=-1)
+            confidence = torch.gather(p, dim=-1, index=torch.unsqueeze(x_decode, -1)).squeeze(dim=-1)
+            # num_mask_token = mask_index.sum()
+            # number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+            x0 = x[:, prompt_length:]
+            
+            # modify tokens with higher confidence
+            transfer_indices = torch.logical_and(confidence > conf_record, x_decode != x0)
+            if transfer_indices.sum() == 0:
+                print(f"Step {i}: No more tokens to transfer, stopping early.")
+                break
+            # # choose the most confident token among transfer_indices to transfer
+            # confidence_masked = torch.where(transfer_indices, confidence, float('-inf'))
+            # transfer_index = torch.argmax(confidence_masked, dim=-1)  # (b,)
+            # row_index = torch.arange(batch_size) # (b,)
+            # conf_record[row_index, transfer_index] = confidence[row_index, transfer_index]
+            # # update x
+            # x[row_index, transfer_index + prompt_length] = x_decode[row_index, transfer_index]
+
+            # transfer all tokens that meet the criteria
+            conf_record = torch.where(transfer_indices, confidence, conf_record)
+            x0_ = torch.where(transfer_indices, x_decode, x0)
+            x[:, prompt_length:] = x0_.clone()
+
+            history.append(x[:, prompt_length:].cpu())
         else:
             raise NotImplementedError(alg)
 

@@ -105,7 +105,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'mdm-ptr_follow_reverse_order_v2-{args.model}M'
+    hp_name = f'mdm-{args.model}M-reverse'
     if args.postfix != '':
         hp_name += f'-{args.postfix}'
     out_dir = Path('workdir/finetune') / hp_name
@@ -161,8 +161,9 @@ def main(fabric, pretrain_path, resume):
         model = TransEncoder(config)
         model.apply(partial(model._init_weights ,n_layer=config.n_layer))
 
-        ckpt_dic = load_file(pretrain_path)
-        model.load_state_dict(ckpt_dic)
+        if pretrain_path != "None":
+            ckpt_dic = load_file(pretrain_path)
+            model.load_state_dict(ckpt_dic)
         fabric.print(f"Loading model from {pretrain_path}")
 
     fabric.print(f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds.")
@@ -252,7 +253,8 @@ def train(fabric, state, train_dataloader, monitor, resume):
         input_ids = train_data['data'] # [prompt + answer + padding], length=2048
         prompt_length = train_data['input_length']  # prompt length
         # print(f"input ids shape: {input_ids.shape}")
-        max_length = 512
+        length = train_data['length'] # [prompt + answer] length
+        max_length = length.max().item()
         input_ids = input_ids[:, :max_length]
 
         total_dim = 32000

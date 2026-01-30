@@ -161,8 +161,8 @@ def main(fabric, pretrain_path, resume):
     # with open(filename) as f:
     #     data = json.load(f)
     if args.task == 'ptr_follow':
-        from ptr_follow_data import preprocess_ptr_follow_ar
-        train_set = preprocess_ptr_follow_ar(tokenizer, r2l=args.r2l, order=args.order)
+        from ptr_follow_data import preprocess_ptr_follow
+        train_set = preprocess_ptr_follow(tokenizer, order=args.order)
     else:
         raise NotImplementedError(f"Task {args.task} not implemented")
     # train_set = preprocess_sharegpt(data, tokenizer)
@@ -291,7 +291,7 @@ def train(fabric, state, train_dataloader, monitor, resume):
             # gen_tokens = torch.argmax(logits, dim=-1)
             # print("Gen vs Target", gen_tokens[0,-17:-1], input_ids[0,-16:])
 
-            temp_tensor = torch.arange(logits.size(1), device=input_ids.device).expand(logits.size(0), logits.size(1))
+            # temp_tensor = torch.arange(logits.size(1), device=input_ids.device).expand(logits.size(0), logits.size(1))
             loss = loss_func(logits[mask_indices], input_ids[mask_indices]) / p_mask[mask_indices]
             loss = loss.sum() / (input_ids.shape[0] * max_length - prompt_length.sum())
             # loss = chunked_cross_entropy(logits, targets, chunk_size=0)
