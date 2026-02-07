@@ -64,9 +64,15 @@ def get_args():
     return args
 
 
-def get_trigpt_sample(args, question, model, tokenizer):
+def get_trigpt_sample(args, question, model, tokenizer, answer):
     print(f"Question: {question}")
     question_ids = tokenizer(question, padding="max_length", max_length=256, truncation=False, return_tensors="pt")['input_ids'].to('cuda')
+    gt_ids = tokenizer(answer, padding="max_length", max_length=17, truncation=True, return_tensors="pt")['input_ids'].to('cuda')
+    gt_ids = gt_ids[:, 1:]  # remove bos token
+    # gt_ids = torch.randint(0, 32000, gt_ids.shape).to('cuda')  # dummy ground truth for testing
+    gt_ids[:, 4] += 1
+    gt_ids[:, 5] += 2
+    gt_ids[:, 6] += 3
     answer_ids, history = trigpt_sample(model,
                              tokenizer,
                              question_ids,
@@ -75,10 +81,11 @@ def get_trigpt_sample(args, question, model, tokenizer):
                              temperature=args.temperature,
                              cfg_scale=args.cfg1,
                              response_length=args.length,
-                             device='cuda')
+                             device='cuda',
+                             resp_ids=gt_ids)
     answer = tokenizer.batch_decode(answer_ids, skip_special_tokens=False)
     history = torch.concatenate(history, dim=0)
-    print(f"History shape: {history.shape}")
+    # print(f"History shape: {history.shape}")
     history = tokenizer.batch_decode(history, skip_special_tokens=False)
     # print(f"Answer length: {answer_ids}")
 
@@ -160,7 +167,8 @@ if __name__ == "__main__":
     length = len(dataset)
     iter = length // batch_size if length % batch_size == 0 else length // batch_size + 1
 
-    for i in range(iter):
+    # for i in range(iter):
+    for i in range(1): 
         end_index = (i + 1) * batch_size if (i + 1) * batch_size < length else length
         data = dataset[i * batch_size: end_index]
         # questions = ['Question: ' + q for q in data["question"]]
@@ -168,7 +176,7 @@ if __name__ == "__main__":
         # right_answers = data["target"]
         right_answers = [get_reward(r) for r in data["reward_model"]]
 
-        preds, history = get_trigpt_sample(args, questions, model, tokenizer)
+        preds, history = get_trigpt_sample(args, questions, model, tokenizer, right_answers)
 
         for index in range(len(questions)):
             print(preds[index])

@@ -22,29 +22,29 @@ ensure_safetensors() {
 }
 CKPT_PATH=$(ensure_safetensors "$CKPT_PATH")
 
-CUDA_VISIBLE_DEVICES=8,9 torchrun \
-    --nproc_per_node=2 \
-    --node_rank=0 \
-    --nnodes=1 \
-    --master_port=29500 \
-    sft/finetune_trigpt_simple.py \
-    --model 336 \
-    --n_gpu 2 \
-    --bs 256 \
-    --save_freq 50 \
-    --pretrain_path $CKPT_PATH
-
-# CUDA_VISIBLE_DEVICES=0 torchrun \
-#     --nproc_per_node=1 \
+# CUDA_VISIBLE_DEVICES=8,9 torchrun \
+#     --nproc_per_node=2 \
 #     --node_rank=0 \
 #     --nnodes=1 \
 #     --master_port=29500 \
 #     sft/finetune_trigpt_simple.py \
-#     --model 206 \
-#     --n_gpu 1 \
+#     --model 336 \
+#     --n_gpu 2 \
 #     --bs 256 \
-#     --save_freq 10 \
+#     --save_freq 50 \
 #     --pretrain_path $CKPT_PATH
+
+CUDA_VISIBLE_DEVICES=1 torchrun \
+    --nproc_per_node=1 \
+    --node_rank=0 \
+    --nnodes=1 \
+    --master_port=29500 \
+    sft/finetune_trigpt_masked.py \
+    --model 336 \
+    --n_gpu 1 \
+    --bs 256 \
+    --save_freq 50 \
+    --postfix scratch
 
 # CUDA_VISIBLE_DEVICES=2 torchrun \
 #     --nproc_per_node=1 \

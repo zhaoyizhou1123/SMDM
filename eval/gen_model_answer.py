@@ -202,12 +202,14 @@ def masked_ar_sample(model_l2r, model_r2l, tokenizer, prompt=None, batch_size=1,
 
 @ torch.no_grad()
 def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', steps=512, temperature=1., cfg_scale=2.,
-                response_length=16, eps=1e-5, dim=32000, device='cuda'):
+                response_length=16, eps=1e-5, dim=32000, device='cuda', resp_ids = None):
     batch_size = batch_size if prompt is None else prompt.shape[0]
     prompt_length = prompt.shape[1]
     context_length = prompt_length + response_length
     x = torch.full((batch_size, context_length), dim, dtype=torch.long).to(device)
     x[:, :prompt.shape[1]] = prompt.clone()
+    if resp_ids is not None:
+        x[:, prompt_length:] = resp_ids.clone()
 
     timesteps = torch.linspace(1, eps, steps + 1, device='cuda')
     history = []
@@ -279,6 +281,43 @@ def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', ste
             conf_record = torch.where(transfer_indices, confidence, conf_record)
             x0_ = torch.where(transfer_indices, x_decode, x0)
             x[:, prompt_length:] = x0_.clone()
+
+            history.append(x[:, prompt_length:].cpu())
+        elif alg == 'self_edit':
+            resp_logits = logits[:, prompt_length:, :] # only response part
+            logits_with_noise = add_gumbel_noise(resp_logits, temperature=temperature)
+            x_decode = torch.argmax(logits_with_noise, dim=-1) # (b,resp_len)
+            # history.append(x_decode.cpu())
+
+            resp_logits = resp_logits.to(torch.float64)
+            p = F.softmax(resp_logits, dim=-1)
+            confidence = torch.gather(p, dim=-1, index=torch.unsqueeze(x_decode, -1)).squeeze(dim=-1)
+            # num_mask_token = mask_index.sum()
+            # number_transfer_tokens = int(num_mask_token * (1 - s / t)) if i < steps - 1 else num_mask_token
+            x0 = x[:, prompt_length:]
+            
+            # modify tokens with higher confidence
+            transfer_indices = torch.logical_and(confidence > conf_record, x_decode != x0)
+            if transfer_indices.sum() == 0:
+                print(f"Step {i}: No more tokens to transfer, stopping early.")
+                break
+            # choose the most confident token among transfer_indices to transfer
+            confidence_masked = torch.where(transfer_indices, confidence, float('-inf'))
+            transfer_index = torch.argmax(confidence_masked, dim=-1)  # (b,)
+            for j in range(batch_size):
+                orig_token = x0[j, transfer_index[j]].item()
+                if orig_token == dim: # mask token
+                    conf_record[j, transfer_index[j]] = confidence[j, transfer_index[j]]
+                    # update x
+                    x[j, transfer_index[j] + prompt_length] = x_decode[j, transfer_index[j]]
+                else: # remask token instead of directly editing
+                    conf_record[j, transfer_index[j]] = -1e10
+                    x[j, transfer_index[j] + prompt_length] = dim
+
+            # # transfer all tokens that meet the criteria
+            # conf_record = torch.where(transfer_indices, confidence, conf_record)
+            # x0_ = torch.where(transfer_indices, x_decode, x0)
+            # x[:, prompt_length:] = x0_.clone()
 
             history.append(x[:, prompt_length:].cpu())
         else:
