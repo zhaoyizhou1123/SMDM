@@ -325,6 +325,56 @@ def trigpt_sample(model, tokenizer, prompt=None, batch_size=1, alg='origin', ste
 
     return x, history
 
+@ torch.no_grad()
+def ar_sample(model, tokenizer, prompt, temperature=1., response_length =16, device='cuda'):
+    x = prompt.clone().to(device)
+    for _ in range(response_length):
+        with torch.no_grad():
+            logits = model(x)[:, -1]
+        if temperature < 1e-4:
+            logits_with_noise = logits
+        else:
+            logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+        next_token = torch.argmax(logits_with_noise, dim=-1, keepdim=True)
+        x = torch.cat([x, next_token], dim=-1)
+    return x
+
+@ torch.no_grad()
+def double_ar_sample(model_l2r, model_r2l, tokenizer, prompt, temperature=0., response_length =16, n_iters=1, device='cuda'):
+    prompt = prompt.to(device)
+    x = prompt.clone()
+    for _ in range(response_length):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits = model_l2r(x)[:, -1]
+        if temperature < 1e-4:
+            logits_with_noise = logits
+        else:
+            logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+        next_token = torch.argmax(logits_with_noise, dim=-1, keepdim=True)
+        x = torch.cat([x, next_token], dim=-1)
+    
+    for _ in range(n_iters):
+        print(x[0, -16:].cpu().tolist())
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            l2r_logits = model_l2r(x)[:, -response_length:]
+        resp_tokens = x[:, -response_length:]
+        flipped_resp_tokens = resp_tokens.flip(dims=[1])
+        flipped_x = torch.cat([prompt, flipped_resp_tokens], dim=-1)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            r2l_logits_flipped = model_r2l(flipped_x)[:, -response_length:]
+        r2l_logits = r2l_logits_flipped.flip(dims=[1])
+
+        l2r_probs = torch.softmax(l2r_logits, dim=-1)
+        r2l_probs = torch.softmax(r2l_logits, dim=-1)
+        # pick max confidence tokens from both directions to update
+        confidence_l2r, pred_l2r = torch.max(l2r_probs, dim=-1)
+        confidence_r2l, pred_r2l = torch.max(r2l_probs, dim=-1)
+        # confidence = torch.max(confidence_l2r, confidence_r2l)
+        pred = torch.where(confidence_l2r >= confidence_r2l, pred_l2r, pred_r2l)
+        x = torch.cat([prompt, pred], dim=-1)
+
+    return x
+
 
 def generate(model, tokenizer, input_ids, max_new_tokens=16):
     # append input_ids with mask token id of length max_new_tokens

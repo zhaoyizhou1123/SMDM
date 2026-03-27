@@ -1,3 +1,6 @@
+# Split train set to train/val
+# Add validation accuracy loop
+
 import glob
 import json
 import math
@@ -28,20 +31,25 @@ from transformers import AutoTokenizer
 import random
 import argparse
 from safetensors.torch import load_file
+from eval.gen_model_answer import ar_sample
+
+import numpy as np
 
 
 def parse_args():
     parse = argparse.ArgumentParser()
     parse.add_argument('--model', type=int, help='model parameters')
     parse.add_argument('--bs', type=int, default=256, help='batch size')
-    parse.add_argument('--epoch', type=int, default=3, help='training epoch')
+    parse.add_argument('--epoch', type=int, default=1, help='training epoch')
     parse.add_argument('--pretrain_path', type=str, help='pretrain ckpt path')
     parse.add_argument('--task', type=str, default='ptr_follow')
     parse.add_argument('--order', type=str, default='reverse', help='reverse, middle')
     parse.add_argument('--n_gpu', type=int, default=4, help='number of gpu')
-    parse.add_argument('--save_freq', type=int, default=200)
+    parse.add_argument('--save_freq', type=int, default=10)
     parse.add_argument('--r2l', action='store_true', help='train r2l model')
     parse.add_argument('--postfix', type=str, default='')
+    parse.add_argument('--num_val', type=int, default=100, help='number of validation samples')
+    parse.add_argument('--val_freq', type=int, default=10, help='validation frequency in steps')
     args = parse.parse_args()
     return args
 
@@ -57,7 +65,7 @@ if args.model <= 50:
     micro_batch_size = 16
 else:
     micro_batch_size = 8
-max_step = int(55612 * args.epoch / global_batch_size) # 3 epochs
+max_step = int(10000 * args.epoch / global_batch_size) # 3 epochs
 warmup_steps = 200
 log_step_interval = 1
 save_step_interval = args.save_freq
@@ -105,7 +113,7 @@ def setup(
         hp_name += f'-{args.postfix}'
     out_dir = Path('workdir/finetune') / hp_name
     pretrain_path = args.pretrain_path
-    wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project=f'ar_sft_{args.task}')
+    wandb_logger = WandbLogger(name=hp_name, save_dir=out_dir, project=f'18786_{args.task}_{args.order}')
 
     precision = precision or get_default_supported_precision(training=True, tpu=tpu)
 
@@ -146,8 +154,8 @@ def main(fabric, pretrain_path, resume):
     # with open(filename) as f:
     #     data = json.load(f)
     if args.task == 'ptr_follow':
-        from ptr_follow_data import preprocess_ptr_follow_ar
-        train_set = preprocess_ptr_follow_ar(tokenizer, r2l=args.r2l, order=args.order)
+        from ptr_follow_data import preprocess_ptr_follow_ar_split
+        train_set, val_set = preprocess_ptr_follow_ar_split(tokenizer, r2l=args.r2l, order=args.order, num_val=args.num_val)
     else:
         raise NotImplementedError(f"Task {args.task} not implemented")
     # train_set = preprocess_sharegpt(data, tokenizer)
@@ -156,6 +164,9 @@ def main(fabric, pretrain_path, resume):
     train_dataloader = DataLoader(train_set, batch_size=micro_batch_size, shuffle=True, drop_last=True,
                                       num_workers=8, pin_memory=True, persistent_workers=True)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
+    val_dataloader = DataLoader(val_set, batch_size=micro_batch_size, shuffle=False, drop_last=False,
+                                      num_workers=8, pin_memory=True, persistent_workers=True)
+    # val_dataloader = fabric.setup_dataloaders(val_dataloader)
 
     fabric.print(f"Loading model with {config.__dict__}")
     t0 = time.perf_counter()
@@ -189,13 +200,13 @@ def main(fabric, pretrain_path, resume):
         fabric.load(resume, state)
 
     train_time = time.perf_counter()
-    train(fabric, state, train_dataloader, monitor, resume)
+    train(fabric, state, train_dataloader, val_dataloader, monitor, resume)
     fabric.print(f"Training time: {(time.perf_counter()-train_time):.2f}s")
     if fabric.device.type == "cuda":
         fabric.print(f"Memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB")
 
 
-def train(fabric, state, train_dataloader, monitor, resume):
+def train(fabric, state, train_dataloader, val_dataloader, monitor, resume):
     model = state["model"]
     optimizer = state["optimizer"]
 
@@ -304,6 +315,29 @@ def train(fabric, state, train_dataloader, monitor, resume):
             checkpoint_path = out_dir / f"iter-{state['iter_num']:06d}-ckpt.pth"
             fabric.print(f"Saving checkpoint to {str(checkpoint_path)!r}")
             fabric.save(checkpoint_path, state)
+
+        if not is_accumulating and (state["step_count"] % args.val_freq == 0):
+            validate(fabric, model, val_dataloader, state["step_count"])
+
+def validate(fabric, model, val_dataloader, step):
+    correct_list = []
+    for data in val_dataloader:
+        input_ids = data['data'] # [prompt + answer + padding]
+        # prompt_length = data['input_length']  # prompt length (torch.Tensor)
+        # length = data['length'] # [prompt + answer] length (torch.Tensor)
+
+        # hard code response length, not good
+        resp_length = 16
+        prompt_ids = input_ids[:, :-resp_length]
+        target_ids = input_ids[:, -resp_length:]
+        
+        output_ids = ar_sample(model, None, prompt_ids, temperature = 0., response_length=resp_length, device=model.device)[:,-resp_length:]
+        output_ids = output_ids.cpu()
+        correct = (output_ids == target_ids).all(dim=-1).float().tolist()
+        correct_list.extend(correct)
+    acc = np.mean(correct_list)
+    fabric.print(f"Step {step}, validation accuracy: {np.mean(correct_list)*100:.2f}%")
+    fabric.log("val/val_acc", acc, step=step)
 
 
 # learning rate decay scheduler (cosine with warmup)

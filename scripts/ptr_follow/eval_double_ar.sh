@@ -1,0 +1,13 @@
+CUDA_VISIBLE_DEVICES=0 torchrun \
+    --nproc_per_node=1 \
+    --node_rank=0 \
+    --nnodes=1 \
+    --master_port=29500 \
+    -m sft.ptr_follow.eval_double_ar \
+    --model 19 \
+    --n_gpu 1 \
+    --bs 256 \
+    --order middle \
+    --num_val 100 \
+    --l2r_path /home/zhaoyiz/projects/SMDM/workdir/finetune/arm-19M-masked-middle/iter-000624-ckpt.pth \
+    --r2l_path /home/zhaoyiz/projects/SMDM/workdir/finetune/arm-19M-masked-middle-r2l/iter-000624-ckpt.pth
