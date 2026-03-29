@@ -1,30 +1,43 @@
+import os
+import time
 import torch
 from torch.utils.data import Dataset
 
 
 class CustomDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
+    def __init__(self, data, input_lengths, lengths):
+        self.data = data                    # (N, max_length) int64
+        self.input_lengths = input_lengths  # (N,) int64
+        self.lengths = lengths              # (N,) int64
 
     def __len__(self):
-        return len(self.data)
+        return self.data.shape[0]
 
     def __getitem__(self, idx):
-        return self.data[idx]
+        return dict(data=self.data[idx], input_length=self.input_lengths[idx],
+                    length=self.lengths[idx])
 
 
 def preprocess_gsm8k(tokenizer, max_length=2048):
-    train_dataset = []
+    cache_path = 'data/gsm8k/train_tokenized.pt'
+    if os.path.exists(cache_path):
+        t0 = time.time()
+        print(f"Loading tokenized dataset from {cache_path}")
+        cache = torch.load(cache_path, weights_only=True)
+        print(f"Cache loaded in {time.time() - t0:.2f}s ({cache['data'].shape[0]} samples)")
+        return CustomDataset(cache['data'], cache['input_length'], cache['length'])
 
-    data = []
+    all_data = []
+    all_input_lengths = []
+    all_lengths = []
+
+    raw = []
     file_path = 'data/gsm8k/train.txt'
     with open(file_path, 'r') as f:
         for line in f:
-            data.append(line)
+            raw.append(line)
 
-    for i in range(len(data)):
-        d = data[i]
-
+    for d in raw:
         if len(d.split('||')) != 2:
             continue
         if len(d.split('||')[1].split('####')) != 2:
@@ -43,22 +56,27 @@ def preprocess_gsm8k(tokenizer, max_length=2048):
         length1 = question.shape[-1] + thought.shape[-1]
         length2 = length1 + answer.shape[-1]
         if length2 > max_length:
-            # exclude prompts that are too long
             continue
 
-        padding_length = 2048 - length1
+        padding_length = max_length - length1
         padding = torch.full((padding_length,), tokenizer.eos_token_id, dtype=question.dtype)
         padded_data = torch.cat((question, thought, padding), dim=-1)
-        train_dataset.append(dict(data=padded_data, input_length=torch.tensor(question.shape[-1]),
-                                  length=torch.tensor(length1)))
+        all_data.append(padded_data)
+        all_input_lengths.append(question.shape[-1])
+        all_lengths.append(length1)
 
-
-        padding_length = 2048 - (question.shape[-1] + thought.shape[-1] + answer.shape[-1])
+        padding_length = max_length - length2
         padding = torch.full((padding_length,), tokenizer.eos_token_id, dtype=question.dtype)
         padded_data = torch.cat((question, thought, answer, padding), dim=-1)
-        train_dataset.append(dict(data=padded_data, input_length=torch.tensor(length1),
-                                  length=torch.tensor(length2)))
+        all_data.append(padded_data)
+        all_input_lengths.append(length1)
+        all_lengths.append(length2)
 
-
-    train_dataset = CustomDataset(train_dataset)
-    return train_dataset
+    cache = dict(
+        data=torch.stack(all_data),
+        input_length=torch.tensor(all_input_lengths, dtype=torch.int64),
+        length=torch.tensor(all_lengths, dtype=torch.int64),
+    )
+    torch.save(cache, cache_path)
+    print(f"Saved tokenized dataset to {cache_path} ({cache['data'].shape[0]} samples)")
+    return CustomDataset(cache['data'], cache['input_length'], cache['length'])

@@ -11,6 +11,7 @@ from safetensors.torch import load_file
 from eval.gen_model_answer import diff_sample
 from evaluate_diff import set_seed
 from eval.math_normalization import normalize_final_answer, check_sympy_equivalence
+from tqdm import tqdm
 
 
 def get_args():
@@ -49,7 +50,7 @@ def get_args():
 
 
 def get_diff_sample(args, question, model, tokenizer):
-    question_ids = tokenizer(question, padding="longest", truncation=True, return_tensors="pt")['input_ids'].to('cuda')
+    question_ids = tokenizer(question, padding="longest", truncation=True, max_length=args.length, return_tensors="pt")['input_ids'].to('cuda')
     prefix_ids = diff_sample(model,
                              tokenizer,
                              question_ids,
@@ -59,9 +60,6 @@ def get_diff_sample(args, question, model, tokenizer):
                              cfg_scale=args.cfg1,
                              context_length=args.length,
                              device='cuda')
-    prefix = tokenizer.batch_decode(prefix_ids, skip_special_tokens=True)
-
-    prefix_ids = tokenizer(prefix, padding="longest", truncation=True, return_tensors="pt")['input_ids'].to('cuda')
     answer_ids = diff_sample(model,
                              tokenizer,
                              prefix_ids,
@@ -101,6 +99,7 @@ if __name__ == "__main__":
 
     model = TransEncoder(config).to(device)
     model.load_state_dict(load_file(args.ckpt_path))
+    model.eval()
 
     acc = 0
     num = 0
@@ -110,7 +109,7 @@ if __name__ == "__main__":
     length = len(dataset['train'])
     iter = length // batch_size if length % batch_size == 0 else length // batch_size + 1
 
-    for i in range(iter):
+    for i in tqdm(range(iter)):
         end_index = (i + 1) * batch_size if (i + 1) * batch_size < length else length
         data = dataset['train'][i * batch_size: end_index]
         questions = ['Question: ' + q for q in data["question"]]
@@ -119,9 +118,9 @@ if __name__ == "__main__":
         preds = get_diff_sample(args, questions, model, tokenizer)
 
         for index in range(len(questions)):
-            print(preds[index])
-            print(f'Ground truth answers:\n', f'{right_answers[index]}\n')
-            print(f'***************************************************')
+            print(preds[index], flush=True)
+            print(f'Ground truth answers:\n', f'{right_answers[index]}\n', flush=True)
+            print(f'***************************************************', flush=True)
 
         for pred, right_answer in zip(preds, right_answers):
             if get_acc(pred, right_answer):

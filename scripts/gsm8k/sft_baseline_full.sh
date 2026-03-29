@@ -1,0 +1,11 @@
+CUDA_VISIBLE_DEVICES=4 torchrun \
+    --nproc_per_node=1 \
+    --node_rank=0 \
+    --nnodes=1 \
+    --master_port=29503 \
+    -m sft.gsm8k.finetune_full_loop \
+    --model 1028 \
+    --pretrain_path models/mdm-1028M-3300e18-rsl-0.01-bs-1024.safetensors \
+    --n_gpu 1 \
+    --bs 256 \
+    --eval_step_interval 1
