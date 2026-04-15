@@ -62,7 +62,7 @@ num_of_devices = args.n_gpu
 global_batch_size = args.bs
 learning_rate = 2e-4
 if args.model <= 50:
-    micro_batch_size = 16
+    micro_batch_size = 128
 else:
     micro_batch_size = 8
 max_step = int(10000 * args.epoch / global_batch_size) # 3 epochs
@@ -106,7 +106,7 @@ def setup(
     resume: Union[bool, Path] = True,
 ) -> None:
     global out_dir
-    hp_name = f'arm-{args.model}M-masked-{args.order}'
+    hp_name = f'arm-{args.model}M-{args.order}'
     if args.r2l:
         hp_name += '-r2l'
     if args.postfix != '':

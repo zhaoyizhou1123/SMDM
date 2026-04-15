@@ -1,0 +1,15 @@
+CUDA_VISIBLE_DEVICES=9 torchrun \
+    --nproc_per_node=1 \
+    --node_rank=0 \
+    --nnodes=1 \
+    --master_port=29500 \
+    -m sft.ptr_follow.finetune_ar_masked_v3_full_loop \
+    --model 19 \
+    --l2r_pretrain_path models/ar-19M-10e18.safetensors \
+    --r2l_pretrain_path models/ar-19M-10e18.safetensors \
+    --n_gpu 1 \
+    --bs 256 \
+    --save_freq 1000 \
+    --order middle \
+    --val_freq 100 \
+    --num_val 100

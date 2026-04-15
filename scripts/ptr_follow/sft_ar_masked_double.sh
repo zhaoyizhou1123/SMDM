@@ -1,0 +1,15 @@
+CUDA_VISIBLE_DEVICES=8 torchrun \
+    --nproc_per_node=1 \
+    --node_rank=0 \
+    --nnodes=1 \
+    --master_port=29500 \
+    -m sft.ptr_follow.finetune_ar_masked_full_loop \
+    --model 336 \
+    --l2r_pretrain_path models/ar-336M-100e18.safetensors \
+    --r2l_pretrain_path models/ar-336M-100e18.safetensors \
+    --n_gpu 1 \
+    --bs 256 \
+    --save_freq 100 \
+    --order middle \
+    --val_freq 100 \
+    --num_val 100

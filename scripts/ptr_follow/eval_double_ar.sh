@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=0 torchrun \
+CUDA_VISIBLE_DEVICES=9 torchrun \
     --nproc_per_node=1 \
     --node_rank=0 \
     --nnodes=1 \

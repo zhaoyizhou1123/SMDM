@@ -196,8 +196,8 @@ def preprocess_ptr_follow_ar_split(tokenizer, max_prompt_length=256, max_respons
                                   length=max_prompt_length + ans_length))
 
 
-    train_dataset = CustomDataset(train_dataset[:-num_val]) # split last num_val samples as validation set
     val_dataset = CustomDataset(train_dataset[-num_val:])
+    train_dataset = CustomDataset(train_dataset[:-num_val]) # split last num_val samples as validation set
     print(f"Final Sudoku dataset size: {len(train_dataset)}")
     print(f"Final Sudoku validation dataset size: {len(val_dataset)}")
     return train_dataset, val_dataset
@@ -208,9 +208,10 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained('TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T',
                                               padding_side="right", use_fast=True)  
 
-    dataset = preprocess_ptr_follow_ar(tokenizer, r2l=False)
+    dataset = preprocess_ptr_follow_ar(tokenizer, r2l=False, order = 'middle')
     # print(dataset[0])
     data = dataset[0]['data']
+    print(data)
     decoded_text = tokenizer.decode(data)
     print(decoded_text)
 
